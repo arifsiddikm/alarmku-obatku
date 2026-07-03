@@ -598,23 +598,16 @@ class _MedicineCard extends StatelessWidget {
                 ),
 
                 // Toggle
-                GestureDetector(
-                  onTap: onToggle,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    width: 44, height: 26,
-                    padding: EdgeInsets.only(left: isActive ? 20 : 2),
-                    decoration: BoxDecoration(
-                      color: isActive ? AppTheme.terracotta : AppTheme.warmGrayLight,
-                      borderRadius: BorderRadius.circular(13),
-                    ),
-                    child: Container(
-                      width: 22, height: 22,
-                      decoration: const BoxDecoration(
-                        color: AppTheme.white,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
+                Transform.scale(
+                  scale: 0.85,
+                  child: Switch(
+                    value: isActive,
+                    onChanged: (_) => onToggle(),
+                    activeColor: AppTheme.white,
+                    activeTrackColor: AppTheme.terracotta,
+                    inactiveThumbColor: AppTheme.white,
+                    inactiveTrackColor: AppTheme.warmGrayLight,
+                    trackOutlineColor: WidgetStateProperty.all(Colors.transparent),
                   ),
                 ),
               ],
