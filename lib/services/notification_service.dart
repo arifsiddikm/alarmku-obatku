@@ -1,21 +1,32 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:timezone/timezone.dart' as tz;
+import 'package:timezone/data/latest.dart' as tz;
 import '../models/medicine.dart';
 
-// Notifikasi hanya jalan di Android/iOS, di web no-op
 class NotificationService {
   static final NotificationService instance = NotificationService._init();
+  final FlutterLocalNotificationsPlugin _plugin =
+      FlutterLocalNotificationsPlugin();
+  bool _initialized = false;
+
   NotificationService._init();
 
   Future<void> init() async {
-    if (kIsWeb) return; // skip di web
-    await _initMobile();
-  }
+    if (kIsWeb) return;
+    if (_initialized) return;
 
-  Future<void> _initMobile() async {
     try {
-      // Import dinamis hanya di mobile
-      final notif = await _getMobileNotif();
-      await notif?.init();
+      tz.initializeTimeZones();
+      // Hardcode WIB — tidak perlu flutter_timezone
+      tz.setLocalLocation(tz.getLocation('Asia/Jakarta'));
+
+      const androidSettings =
+          AndroidInitializationSettings('@mipmap/ic_launcher');
+      const settings = InitializationSettings(android: androidSettings);
+      await _plugin.initialize(settings);
+      _initialized = true;
     } catch (e) {
       debugPrint('Notif init error: $e');
     }
@@ -24,8 +35,8 @@ class NotificationService {
   Future<bool> requestPermission() async {
     if (kIsWeb) return true;
     try {
-      final notif = await _getMobileNotif();
-      return await notif?.requestPermission() ?? false;
+      final status = await Permission.notification.request();
+      return status.isGranted;
     } catch (_) {
       return false;
     }
@@ -34,40 +45,98 @@ class NotificationService {
   Future<bool> checkPermission() async {
     if (kIsWeb) return true;
     try {
-      final notif = await _getMobileNotif();
-      return await notif?.checkPermission() ?? false;
+      return await Permission.notification.isGranted;
     } catch (_) {
       return false;
     }
   }
 
   Future<void> scheduleForMedicine(Medicine medicine) async {
-    if (kIsWeb) return;
+    if (kIsWeb || !medicine.isActive || medicine.id == null) return;
     try {
-      final notif = await _getMobileNotif();
-      await notif?.scheduleForMedicine(medicine);
+      await cancelForMedicine(medicine);
+
+      final timeParts = medicine.time.split(':');
+      final hour = int.parse(timeParts[0]);
+      final minute = int.parse(timeParts[1]);
+
+      final details = NotificationDetails(
+        android: AndroidNotificationDetails(
+          'alarmku_channel',
+          'Pengingat Minum Obat',
+          channelDescription: 'Notifikasi jadwal minum obat',
+          importance: Importance.max,
+          priority: Priority.high,
+          icon: '@mipmap/ic_launcher',
+          playSound: true,
+          enableVibration: true,
+          fullScreenIntent: true,
+        ),
+      );
+
+      if (medicine.isRepeat && medicine.days.isNotEmpty) {
+        for (final day in medicine.days) {
+          await _plugin.zonedSchedule(
+            _notifId(medicine.id!, day),
+            '💊 Waktunya minum obat!',
+            '${medicine.name} — ${medicine.dosage}',
+            _nextDayTime(day, hour, minute),
+            details,
+            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+            matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
+            uiLocalNotificationDateInterpretation:
+                UILocalNotificationDateInterpretation.absoluteTime,
+          );
+        }
+      } else {
+        final now = tz.TZDateTime.now(tz.local);
+        tz.TZDateTime scheduled = tz.TZDateTime(
+            tz.local, now.year, now.month, now.day, hour, minute);
+        if (scheduled.isBefore(now)) {
+          scheduled = scheduled.add(const Duration(days: 1));
+        }
+        await _plugin.zonedSchedule(
+          _notifId(medicine.id!, 0),
+          '💊 Waktunya minum obat!',
+          '${medicine.name} — ${medicine.dosage}',
+          scheduled,
+          details,
+          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+          uiLocalNotificationDateInterpretation:
+              UILocalNotificationDateInterpretation.absoluteTime,
+        );
+      }
     } catch (e) {
       debugPrint('Schedule notif error: $e');
     }
   }
 
   Future<void> cancelForMedicine(Medicine medicine) async {
-    if (kIsWeb) return;
+    if (kIsWeb || medicine.id == null) return;
     try {
-      final notif = await _getMobileNotif();
-      await notif?.cancelForMedicine(medicine);
-    } catch (e) {
-      debugPrint('Cancel notif error: $e');
-    }
+      for (int d = 0; d <= 7; d++) {
+        await _plugin.cancel(_notifId(medicine.id!, d));
+      }
+    } catch (_) {}
   }
 
   Future<void> cancelAll() async {
     if (kIsWeb) return;
     try {
-      final notif = await _getMobileNotif();
-      await notif?.cancelAll();
+      await _plugin.cancelAll();
     } catch (_) {}
   }
+
+  tz.TZDateTime _nextDayTime(int day, int hour, int minute) {
+    tz.TZDateTime dt = tz.TZDateTime.now(tz.local);
+    dt = tz.TZDateTime(tz.local, dt.year, dt.month, dt.day, hour, minute);
+    while (dt.weekday != day || dt.isBefore(tz.TZDateTime.now(tz.local))) {
+      dt = dt.add(const Duration(days: 1));
+    }
+    return dt;
+  }
+
+  int _notifId(int medicineId, int day) => medicineId * 10 + day;
 
   String? countdownText(Medicine medicine) {
     if (!medicine.isActive) return null;
@@ -101,48 +170,4 @@ class NotificationService {
     }
     return '${diff.inDays} hari lagi';
   }
-
-  // Lazy load implementasi mobile biar ga error di web
-  _MobileNotifImpl? _mobileImpl;
-  Future<_MobileNotifImpl?> _getMobileNotif() async {
-    if (kIsWeb) return null;
-    _mobileImpl ??= _MobileNotifImpl();
-    return _mobileImpl;
-  }
 }
-
-// Implementasi notif mobile (hanya diload di non-web)
-class _MobileNotifImpl {
-  bool _initialized = false;
-  dynamic _plugin; // FlutterLocalNotificationsPlugin
-
-  Future<void> init() async {
-    if (_initialized) return;
-    try {
-      // Import runtime biar ga compile error di web
-      final pluginLib = await _loadPlugin();
-      if (pluginLib == null) return;
-      _plugin = pluginLib;
-      _initialized = true;
-    } catch (e) {
-      debugPrint('Mobile notif init error: $e');
-    }
-  }
-
-  Future<dynamic> _loadPlugin() async {
-    try {
-      // Ini akan diload hanya di platform yang support
-      return _NotifPlugin();
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<bool> requestPermission() async => true;
-  Future<bool> checkPermission() async => true;
-  Future<void> scheduleForMedicine(Medicine m) async {}
-  Future<void> cancelForMedicine(Medicine m) async {}
-  Future<void> cancelAll() async {}
-}
-
-class _NotifPlugin {}
