@@ -13,7 +13,7 @@ class NotificationService {
 
   NotificationService._init();
 
-  static const _channelId = 'alarmku_v2';
+  static const _channelId = 'alarmku_v3';
   static const _channelName = 'Pengingat Minum Obat';
 
   Future<void> init() async {
@@ -22,7 +22,11 @@ class NotificationService {
 
     try {
       tz.initializeTimeZones();
+
+      // Hardcode Asia/Jakarta — WIB UTC+7
+      // Auto-detect sering salah di beberapa device Android
       tz.setLocalLocation(tz.getLocation('Asia/Jakarta'));
+      debugPrint('[AlarmKu] Timezone set: Asia/Jakarta UTC+7');
 
       const androidSettings =
           AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -35,11 +39,12 @@ class NotificationService {
         },
       );
 
-      // Buat channel Android dengan importance MAX
+      // Buat channel per sound key
       final androidPlugin = _plugin
           .resolvePlatformSpecificImplementation<
               AndroidFlutterLocalNotificationsPlugin>();
 
+      // Channel default (sistem)
       await androidPlugin?.createNotificationChannel(
         const AndroidNotificationChannel(
           _channelId,
@@ -52,6 +57,21 @@ class NotificationService {
         ),
       );
 
+      // Channel per nada dering
+      for (final sound in ['gentle', 'urgent', 'classic', 'digital']) {
+        await androidPlugin?.createNotificationChannel(
+          AndroidNotificationChannel(
+            '${_channelId}_$sound',
+            '$_channelName ($sound)',
+            importance: Importance.max,
+            playSound: true,
+            sound: RawResourceAndroidNotificationSound(sound),
+            enableVibration: true,
+            showBadge: true,
+          ),
+        );
+      }
+
       _initialized = true;
       debugPrint('[AlarmKu] NotificationService initialized OK');
     } catch (e) {
@@ -59,62 +79,42 @@ class NotificationService {
     }
   }
 
-  // Request semua permission yang dibutuhkan
   Future<Map<String, bool>> requestAllPermissions() async {
     if (kIsWeb) return {'notification': true};
-
     final results = <String, bool>{};
-
     try {
-      // 1. Notifikasi (Android 13+)
       final notifStatus = await Permission.notification.request();
       results['notification'] = notifStatus.isGranted;
       debugPrint('[AlarmKu] Notification permission: ${notifStatus.name}');
 
-      // 2. Exact Alarm (Android 12+)
       final androidPlugin = _plugin
           .resolvePlatformSpecificImplementation<
               AndroidFlutterLocalNotificationsPlugin>();
       final exactAlarm =
           await androidPlugin?.requestExactAlarmsPermission() ?? false;
       results['exact_alarm'] = exactAlarm;
-      debugPrint('[AlarmKu] Exact alarm permission: $exactAlarm');
+      debugPrint('[AlarmKu] Exact alarm: $exactAlarm');
     } catch (e) {
-      debugPrint('[AlarmKu] Permission request error: $e');
+      debugPrint('[AlarmKu] Permission error: $e');
     }
-
     return results;
   }
 
   Future<bool> checkPermission() async {
     if (kIsWeb) return true;
     try {
-      final granted = await Permission.notification.isGranted;
-      debugPrint('[AlarmKu] Notification granted: $granted');
-      return granted;
+      return await Permission.notification.isGranted;
     } catch (_) {
       return false;
     }
   }
 
-  Future<void> scheduleForMedicine(Medicine medicine) async {
-    if (kIsWeb || !medicine.isActive || medicine.id == null) return;
-
-    try {
-      await cancelForMedicine(medicine);
-
-      final timeParts = medicine.time.split(':');
-      final hour = int.parse(timeParts[0]);
-      final minute = int.parse(timeParts[1]);
-
-      debugPrint(
-          '[AlarmKu] Scheduling: ${medicine.name} at ${medicine.time} days=${medicine.days} repeat=${medicine.isRepeat}');
-
-      const details = NotificationDetails(
+  NotificationDetails _buildDetails(String soundKey) {
+    if (soundKey == 'default') {
+      return const NotificationDetails(
         android: AndroidNotificationDetails(
           _channelId,
           _channelName,
-          channelDescription: 'Notifikasi jadwal minum obat',
           importance: Importance.max,
           priority: Priority.high,
           icon: '@mipmap/ic_launcher',
@@ -126,44 +126,119 @@ class NotificationService {
           autoCancel: true,
         ),
       );
+    }
+
+    return NotificationDetails(
+      android: AndroidNotificationDetails(
+        '${_channelId}_$soundKey',
+        '$_channelName ($soundKey)',
+        importance: Importance.max,
+        priority: Priority.high,
+        icon: '@mipmap/ic_launcher',
+        playSound: true,
+        sound: RawResourceAndroidNotificationSound(soundKey),
+        enableVibration: true,
+        fullScreenIntent: true,
+        category: AndroidNotificationCategory.alarm,
+        visibility: NotificationVisibility.public,
+        autoCancel: true,
+      ),
+    );
+  }
+
+  Future<void> scheduleForMedicine(Medicine medicine) async {
+    if (kIsWeb || !medicine.isActive || medicine.id == null) return;
+
+    try {
+      await cancelForMedicine(medicine);
+
+      final timeParts = medicine.time.split(':');
+      final hour = int.parse(timeParts[0]);
+      final minute = int.parse(timeParts[1]);
+      final details = _buildDetails(medicine.soundKey);
+
+      // Pakai DateTime.now() sebagai referensi waktu lokal
+      final nowDt = DateTime.now();
+      debugPrint('[AlarmKu] Scheduling ${medicine.name} at ${medicine.time} '
+          'days=${medicine.days} repeat=${medicine.isRepeat} sound=${medicine.soundKey} now=$nowDt');
 
       if (medicine.isRepeat && medicine.days.isNotEmpty) {
         for (final day in medicine.days) {
-          final scheduled = _nextDayTime(day, hour, minute);
           final notifId = _notifId(medicine.id!, day);
-          debugPrint(
-              '[AlarmKu] Schedule id=$notifId day=$day at $scheduled');
-          await _plugin.zonedSchedule(
-            notifId,
-            '💊 Waktunya minum obat!',
-            '${medicine.name} — ${medicine.dosage}',
-            scheduled,
-            details,
-            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-            matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
-            uiLocalNotificationDateInterpretation:
-                UILocalNotificationDateInterpretation.absoluteTime,
-          );
+
+          // Hitung waktu target pakai DateTime biasa
+          DateTime target = DateTime(nowDt.year, nowDt.month, nowDt.day, hour, minute);
+
+          // Geser ke hari yang benar
+          int tries = 0;
+          while (tries < 8) {
+            if (target.weekday == day && target.isAfter(nowDt)) {
+              break;
+            }
+            target = target.add(const Duration(days: 1));
+            tries++;
+          }
+
+          final isToday = target.day == nowDt.day && target.month == nowDt.month;
+          final tzTarget = tz.TZDateTime(tz.local, target.year, target.month, target.day, target.hour, target.minute);
+
+          debugPrint('[AlarmKu] → id=$notifId day=$day target=$target isToday=$isToday');
+
+          if (isToday) {
+            // Hari ini — trigger sekali, tanpa repeat component
+            await _plugin.zonedSchedule(
+              notifId,
+              '💊 Waktunya minum obat!',
+              '${medicine.name} — ${medicine.dosage}',
+              tzTarget,
+              details,
+              androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+              uiLocalNotificationDateInterpretation:
+                  UILocalNotificationDateInterpretation.absoluteTime,
+              payload: medicine.id.toString(),
+            );
+          } else {
+            // Hari lain — repeat mingguan
+            await _plugin.zonedSchedule(
+              notifId,
+              '💊 Waktunya minum obat!',
+              '${medicine.name} — ${medicine.dosage}',
+              tzTarget,
+              details,
+              androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+              matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
+              uiLocalNotificationDateInterpretation:
+                  UILocalNotificationDateInterpretation.absoluteTime,
+              payload: medicine.id.toString(),
+            );
+          }
         }
       } else {
-        // Sekali — jam terdekat hari ini atau besok
-        final now = tz.TZDateTime.now(tz.local);
-        tz.TZDateTime scheduled =
-            tz.TZDateTime(tz.local, now.year, now.month, now.day, hour, minute);
-        if (scheduled.isBefore(now.add(const Duration(seconds: 5)))) {
-          scheduled = scheduled.add(const Duration(days: 1));
+        // Mode sekali
+        DateTime target = DateTime(nowDt.year, nowDt.month, nowDt.day, hour, minute);
+
+        // Kalau sudah lewat (bukan belum), geser ke besok
+        if (target.isBefore(nowDt)) {
+          target = target.add(const Duration(days: 1));
         }
+
+        debugPrint('[AlarmKu] nowDt=$nowDt target=$target isBefore=${target.isBefore(nowDt)}');
+
+        final tzTarget = tz.TZDateTime(tz.local, target.year, target.month, target.day, target.hour, target.minute);
         final notifId = _notifId(medicine.id!, 0);
-        debugPrint('[AlarmKu] Schedule sekali id=$notifId at $scheduled');
+
+        debugPrint('[AlarmKu] → sekali id=$notifId target=$target tzTarget=$tzTarget');
+
         await _plugin.zonedSchedule(
           notifId,
           '💊 Waktunya minum obat!',
           '${medicine.name} — ${medicine.dosage}',
-          scheduled,
+          tzTarget,
           details,
           androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
           uiLocalNotificationDateInterpretation:
               UILocalNotificationDateInterpretation.absoluteTime,
+          payload: medicine.id.toString(),
         );
       }
 
@@ -173,14 +248,13 @@ class NotificationService {
     }
   }
 
-  // Test notif langsung muncul — untuk debug
   Future<void> showTestNotification() async {
     if (kIsWeb) return;
     try {
       await _plugin.show(
         9999,
         '✅ Test AlarmKu',
-        'Notifikasi berfungsi dengan baik!',
+        'Notifikasi berfungsi! Alarm obat akan muncul tepat waktu.',
         const NotificationDetails(
           android: AndroidNotificationDetails(
             _channelId,
@@ -191,9 +265,38 @@ class NotificationService {
           ),
         ),
       );
-      debugPrint('[AlarmKu] Test notification sent');
+      debugPrint('[AlarmKu] Test notification sent OK');
     } catch (e) {
       debugPrint('[AlarmKu] Test notif error: $e');
+    }
+  }
+
+  Future<void> showImmediateNotification({
+    required String title,
+    required String body,
+  }) async {
+    if (kIsWeb) return;
+    try {
+      final id = DateTime.now().millisecondsSinceEpoch % 100000;
+      await _plugin.show(
+        id,
+        title,
+        body,
+        const NotificationDetails(
+          android: AndroidNotificationDetails(
+            _channelId,
+            _channelName,
+            importance: Importance.max,
+            priority: Priority.high,
+            icon: '@mipmap/ic_launcher',
+            playSound: true,
+            enableVibration: true,
+          ),
+        ),
+      );
+      debugPrint('[AlarmKu] Immediate notif sent: $title');
+    } catch (e) {
+      debugPrint('[AlarmKu] Immediate notif error: $e');
     }
   }
 
@@ -203,7 +306,6 @@ class NotificationService {
       for (int d = 0; d <= 7; d++) {
         await _plugin.cancel(_notifId(medicine.id!, d));
       }
-      debugPrint('[AlarmKu] Cancelled notif for ${medicine.name}');
     } catch (_) {}
   }
 
@@ -211,18 +313,16 @@ class NotificationService {
     if (kIsWeb) return;
     try {
       await _plugin.cancelAll();
-      debugPrint('[AlarmKu] All notifications cancelled');
     } catch (_) {}
   }
 
-  // List semua notif yang sedang terjadwal
   Future<void> debugListPending() async {
     if (kIsWeb) return;
     try {
       final pending = await _plugin.pendingNotificationRequests();
-      debugPrint('[AlarmKu] Pending notifications: ${pending.length}');
+      debugPrint('[AlarmKu] Pending: ${pending.length}');
       for (final n in pending) {
-        debugPrint('[AlarmKu]   → id=${n.id} title=${n.title} body=${n.body}');
+        debugPrint('[AlarmKu]   id=${n.id} | ${n.title} | ${n.body}');
       }
     } catch (e) {
       debugPrint('[AlarmKu] debugListPending error: $e');
@@ -233,11 +333,13 @@ class NotificationService {
     tz.TZDateTime dt = tz.TZDateTime.now(tz.local);
     dt = tz.TZDateTime(tz.local, dt.year, dt.month, dt.day, hour, minute);
     int tries = 0;
-    while ((dt.weekday != day ||
-            dt.isBefore(tz.TZDateTime.now(tz.local).add(
-              const Duration(seconds: 5),
-            ))) &&
-        tries < 8) {
+    while (tries < 8) {
+      if (dt.weekday == day &&
+          dt.isAfter(tz.TZDateTime.now(tz.local).add(
+            const Duration(seconds: 30),
+          ))) {
+        break;
+      }
       dt = dt.add(const Duration(days: 1));
       tries++;
     }

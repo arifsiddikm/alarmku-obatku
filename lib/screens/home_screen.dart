@@ -179,6 +179,14 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _testNotif(Medicine m) async {
+    await NotificationService.instance.showImmediateNotification(
+      title: '💊 ${m.name}',
+      body: '${m.dosage}${m.notes.isNotEmpty ? ' · ${m.notes}' : ''}',
+    );
+    if (mounted) showSnackBar(context, 'Test notif dikirim: ${m.name}');
+  }
+
   Future<void> _toggleMedicine(Medicine m) async {
     final newState = !m.isActive;
     await DatabaseService.instance.toggleMedicineActive(m.id!, newState);
@@ -223,7 +231,10 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: Colors.transparent,
       builder: (_) => EditProfileSheet(
         user: _user!,
-        onSaved: _loadData,
+        onSaved: () async {
+          await _loadData(); // reload user dari DB
+          if (mounted) showSnackBar(context, 'Profil berhasil diperbarui ✓');
+        },
       ),
     );
   }
@@ -446,6 +457,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       onToggle: () => _toggleMedicine(m),
                       onEdit: () => _openEditSheet(m),
                       onDelete: () => _deleteMedicine(m),
+                      onTestNotif: () => _testNotif(m),
                     )),
                 ]),
               ),
@@ -552,6 +564,7 @@ class _MedicineCard extends StatelessWidget {
   final VoidCallback onToggle;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+  final VoidCallback onTestNotif;
 
   const _MedicineCard({
     required this.medicine,
@@ -560,6 +573,7 @@ class _MedicineCard extends StatelessWidget {
     required this.onToggle,
     required this.onEdit,
     required this.onDelete,
+    required this.onTestNotif,
   });
 
   @override
@@ -729,8 +743,19 @@ class _MedicineCard extends StatelessWidget {
                   onSelected: (val) {
                     if (val == 'edit') onEdit();
                     if (val == 'delete') onDelete();
+                    if (val == 'test') onTestNotif();
                   },
                   itemBuilder: (_) => [
+                    const PopupMenuItem(
+                      value: 'test',
+                      child: Row(
+                        children: [
+                          Icon(Icons.notifications_active_outlined, size: 18, color: AppTheme.sage),
+                          SizedBox(width: 10),
+                          Text('Test notifikasi', style: TextStyle(color: AppTheme.sageDark, fontSize: 14)),
+                        ],
+                      ),
+                    ),
                     const PopupMenuItem(
                       value: 'edit',
                       child: Row(

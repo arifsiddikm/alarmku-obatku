@@ -51,8 +51,7 @@ class _EditProfileSheetState extends State<EditProfileSheet> {
 
     if (mounted) {
       Navigator.pop(context);
-      widget.onSaved();
-      showSnackBar(context, 'Profil berhasil diperbarui');
+      widget.onSaved(); // ini trigger _loadData() di HomeScreen
     }
   }
 

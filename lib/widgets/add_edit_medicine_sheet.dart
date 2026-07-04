@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:audioplayers/audioplayers.dart';
 import '../models/medicine.dart';
 import '../services/database_service.dart';
 import '../services/notification_service.dart';
@@ -8,7 +9,7 @@ import 'confirm_dialog.dart';
 
 class AddEditMedicineSheet extends StatefulWidget {
   final int userId;
-  final Medicine? medicine; // null = tambah baru
+  final Medicine? medicine;
   final VoidCallback onSaved;
 
   const AddEditMedicineSheet({
@@ -32,6 +33,8 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
   bool _isRepeat = true;
   String _soundKey = 'default';
   bool _saving = false;
+  bool _previewPlaying = false;
+  final _player = AudioPlayer();
 
   bool get isEdit => widget.medicine != null;
   final _dayLabels = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
@@ -53,16 +56,12 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
   }
 
   @override
-  @override
   void dispose() {
     _nameCtrl.dispose();
     _dosageCtrl.dispose();
     _notesCtrl.dispose();
+    _player.dispose();
     super.dispose();
-  }
-
-  Future<void> _selectSound(String key) async {
-    setState(() => _soundKey = key);
   }
 
   String get _timeStr =>
@@ -72,14 +71,39 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
     final picked = await showTimePicker(
       context: context,
       initialTime: _time,
-      builder: (context, child) => Theme(
-        data: Theme.of(context).copyWith(
-          colorScheme: const ColorScheme.light(primary: AppTheme.terracotta),
+      initialEntryMode: TimePickerEntryMode.inputOnly, // langsung ketik, lebih jelas
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(
+          alwaysUse24HourFormat: true, // paksa 24 jam
         ),
-        child: child!,
+        child: Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(primary: AppTheme.terracotta),
+          ),
+          child: child!,
+        ),
       ),
     );
     if (picked != null) setState(() => _time = picked);
+  }
+
+  Future<void> _previewSound(String key) async {
+    setState(() {
+      _soundKey = key;
+      _previewPlaying = true;
+    });
+    try {
+      await _player.stop();
+      if (!kIsWeb && key != 'default') {
+        await _player.play(AssetSource('sounds/$key.mp3'));
+        await Future.delayed(const Duration(seconds: 2));
+        await _player.stop();
+      }
+    } catch (e) {
+      debugPrint('[AlarmKu] Preview error: $e');
+    } finally {
+      if (mounted) setState(() => _previewPlaying = false);
+    }
   }
 
   Future<void> _save() async {
@@ -88,7 +112,6 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
       showSnackBar(context, 'Pilih minimal 1 hari', isError: true);
       return;
     }
-
     setState(() => _saving = true);
 
     final medicine = Medicine(
@@ -129,7 +152,9 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       padding: EdgeInsets.only(
-        left: 24, right: 24, top: 16,
+        left: 24,
+        right: 24,
+        top: 16,
         bottom: MediaQuery.of(context).viewInsets.bottom + 24,
       ),
       child: Form(
@@ -141,7 +166,8 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
             children: [
               Center(
                 child: Container(
-                  width: 40, height: 4,
+                  width: 40,
+                  height: 4,
                   decoration: BoxDecoration(
                     color: AppTheme.warmGrayLight,
                     borderRadius: BorderRadius.circular(2),
@@ -152,7 +178,6 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
               Text(isEdit ? 'Edit Alarm' : 'Tambah Alarm', style: AppText.h2),
               const SizedBox(height: 20),
 
-              // Nama obat
               TextFormField(
                 controller: _nameCtrl,
                 decoration: const InputDecoration(
@@ -160,22 +185,22 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
                   hintText: 'cth: Paracetamol, Vitamin C',
                 ),
                 textCapitalization: TextCapitalization.words,
-                validator: (v) => v!.trim().isEmpty ? 'Nama obat wajib diisi' : null,
+                validator: (v) =>
+                    v!.trim().isEmpty ? 'Nama obat wajib diisi' : null,
               ),
               const SizedBox(height: 12),
 
-              // Dosis
               TextFormField(
                 controller: _dosageCtrl,
                 decoration: const InputDecoration(
                   labelText: 'Dosis',
                   hintText: 'cth: 1 tablet, 5ml, 2 kapsul',
                 ),
-                validator: (v) => v!.trim().isEmpty ? 'Dosis wajib diisi' : null,
+                validator: (v) =>
+                    v!.trim().isEmpty ? 'Dosis wajib diisi' : null,
               ),
               const SizedBox(height: 12),
 
-              // Catatan
               TextFormField(
                 controller: _notesCtrl,
                 decoration: const InputDecoration(
@@ -186,12 +211,12 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
               ),
               const SizedBox(height: 16),
 
-              // Waktu
               InkWell(
                 onTap: _pickTime,
                 borderRadius: BorderRadius.circular(12),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 14),
                   decoration: BoxDecoration(
                     color: AppTheme.white,
                     border: Border.all(color: AppTheme.warmGrayLight),
@@ -199,19 +224,20 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
                   ),
                   child: Row(
                     children: [
-                      const Icon(Icons.access_time_rounded, color: AppTheme.terracotta, size: 20),
+                      const Icon(Icons.access_time_rounded,
+                          color: AppTheme.terracotta, size: 20),
                       const SizedBox(width: 10),
                       Text('Jam minum', style: AppText.bodyMuted),
                       const Spacer(),
                       Text(_timeStr,
-                          style: AppText.h3.copyWith(color: AppTheme.terracotta)),
+                          style: AppText.h3
+                              .copyWith(color: AppTheme.terracotta)),
                     ],
                   ),
                 ),
               ),
               const SizedBox(height: 16),
 
-              // Repeat toggle
               Row(
                 children: [
                   Text('Mode pengingat', style: AppText.label),
@@ -219,19 +245,24 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
                   _ModeChip(
                     label: 'Sekali',
                     selected: !_isRepeat,
-                    onTap: () => setState(() { _isRepeat = false; _days = []; }),
+                    onTap: () => setState(() {
+                      _isRepeat = false;
+                      _days = [];
+                    }),
                   ),
                   const SizedBox(width: 8),
                   _ModeChip(
                     label: 'Berulang',
                     selected: _isRepeat,
-                    onTap: () => setState(() { _isRepeat = true; if (_days.isEmpty) _days = [1,2,3,4,5,6,7]; }),
+                    onTap: () => setState(() {
+                      _isRepeat = true;
+                      if (_days.isEmpty) _days = [1, 2, 3, 4, 5, 6, 7];
+                    }),
                   ),
                 ],
               ),
               const SizedBox(height: 12),
 
-              // Hari (hanya tampil kalau repeat)
               if (_isRepeat) ...[
                 Text('Hari pengingat', style: AppText.label),
                 const SizedBox(height: 8),
@@ -242,13 +273,20 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
                     final selected = _days.contains(day);
                     return GestureDetector(
                       onTap: () => setState(() {
-                        if (selected) { _days.remove(day); } else { _days.add(day); }
+                        if (selected) {
+                          _days.remove(day);
+                        } else {
+                          _days.add(day);
+                        }
                       }),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 150),
-                        width: 38, height: 38,
+                        width: 38,
+                        height: 38,
                         decoration: BoxDecoration(
-                          color: selected ? AppTheme.terracotta : AppTheme.creamDark,
+                          color: selected
+                              ? AppTheme.terracotta
+                              : AppTheme.creamDark,
                           borderRadius: BorderRadius.circular(10),
                         ),
                         alignment: Alignment.center,
@@ -257,7 +295,9 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
-                            color: selected ? AppTheme.white : AppTheme.warmGray,
+                            color: selected
+                                ? AppTheme.white
+                                : AppTheme.warmGray,
                           ),
                         ),
                       ),
@@ -267,8 +307,24 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
                 const SizedBox(height: 12),
               ],
 
-              // Pilih suara
-              Text('Nada dering', style: AppText.label),
+              // Nada dering
+              Row(
+                children: [
+                  Text('Nada dering', style: AppText.label),
+                  if (_previewPlaying) ...[
+                    const SizedBox(width: 8),
+                    const SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: AppTheme.terracotta),
+                    ),
+                    Text('  memutar...',
+                        style: AppText.caption
+                            .copyWith(color: AppTheme.terracotta)),
+                  ],
+                ],
+              ),
               const SizedBox(height: 8),
               SizedBox(
                 height: 36,
@@ -277,22 +333,29 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
                   children: AlarmSound.all.map((s) {
                     final sel = _soundKey == s.key;
                     return GestureDetector(
-                      onTap: () => _selectSound(s.key),
+                      onTap: () => _previewSound(s.key),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 150),
                         margin: const EdgeInsets.only(right: 8),
                         padding: const EdgeInsets.symmetric(
                             horizontal: 14, vertical: 8),
                         decoration: BoxDecoration(
-                          color: sel ? AppTheme.terracotta : AppTheme.creamDark,
+                          color: sel
+                              ? AppTheme.terracotta
+                              : AppTheme.creamDark,
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             if (sel) ...[
-                              const Icon(Icons.music_note_rounded,
-                                  size: 13, color: AppTheme.white),
+                              Icon(
+                                _previewPlaying
+                                    ? Icons.volume_up_rounded
+                                    : Icons.music_note_rounded,
+                                size: 13,
+                                color: AppTheme.white,
+                              ),
                               const SizedBox(width: 4),
                             ],
                             Text(
@@ -300,8 +363,9 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w500,
-                                color:
-                                    sel ? AppTheme.white : AppTheme.warmGray,
+                                color: sel
+                                    ? AppTheme.white
+                                    : AppTheme.warmGray,
                               ),
                             ),
                           ],
@@ -313,7 +377,6 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
               ),
               const SizedBox(height: 24),
 
-              // Tombol simpan
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
@@ -340,7 +403,8 @@ class _ModeChip extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
-  const _ModeChip({required this.label, required this.selected, required this.onTap});
+  const _ModeChip(
+      {required this.label, required this.selected, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -348,7 +412,8 @@ class _ModeChip extends StatelessWidget {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        padding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
         decoration: BoxDecoration(
           color: selected ? AppTheme.terracotta : AppTheme.creamDark,
           borderRadius: BorderRadius.circular(20),
@@ -356,7 +421,8 @@ class _ModeChip extends StatelessWidget {
         child: Text(
           label,
           style: TextStyle(
-            fontSize: 13, fontWeight: FontWeight.w500,
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
             color: selected ? AppTheme.white : AppTheme.warmGray,
           ),
         ),
