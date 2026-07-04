@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../models/medicine.dart';
@@ -66,6 +67,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final granted = await NotificationService.instance.checkPermission();
     if (!granted && mounted) {
       await _showPermissionDialog();
+    } else if (granted) {
+      // Sudah granted, request exact alarm juga
+      await NotificationService.instance.requestAllPermissions();
     }
   }
 
@@ -85,7 +89,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 color: AppTheme.terracottaLight.withOpacity(0.2),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(Icons.notifications_outlined, color: AppTheme.terracotta, size: 22),
+              child: const Icon(Icons.notifications_outlined,
+                  color: AppTheme.terracotta, size: 22),
             ),
             const SizedBox(width: 12),
             const Text('Izin diperlukan', style: AppText.h3),
@@ -105,17 +110,26 @@ class _HomeScreenState extends State<HomeScreen> {
               label: 'Notifikasi',
               desc: 'Untuk kirim alarm pengingat obat',
             ),
+            const SizedBox(height: 8),
+            _PermissionRow(
+              icon: Icons.alarm_outlined,
+              label: 'Exact Alarm',
+              desc: 'Agar alarm tepat waktu',
+            ),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Nanti saja', style: TextStyle(color: AppTheme.warmGray)),
+            child: const Text('Nanti saja',
+                style: TextStyle(color: AppTheme.warmGray)),
           ),
           ElevatedButton(
             onPressed: () async {
               Navigator.pop(ctx);
-              await NotificationService.instance.requestPermission();
+              final results = await NotificationService.instance
+                  .requestAllPermissions();
+              debugPrint('[AlarmKu] Permission results: $results');
             },
             child: const Text('Izinkan'),
           ),
@@ -262,9 +276,23 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               ),
               actions: [
+                // Tombol debug — test notif langsung muncul
+                IconButton(
+                  onPressed: () async {
+                    await NotificationService.instance.showTestNotification();
+                    await NotificationService.instance.debugListPending();
+                    if (mounted) {
+                      showSnackBar(context, '🔔 Test notif dikirim — cek status bar HP');
+                    }
+                  },
+                  icon: const Icon(Icons.bug_report_outlined,
+                      color: AppTheme.warmGray, size: 22),
+                  tooltip: 'Test Notifikasi',
+                ),
                 IconButton(
                   onPressed: _logout,
-                  icon: const Icon(Icons.logout_rounded, color: AppTheme.warmGray, size: 22),
+                  icon: const Icon(Icons.logout_rounded,
+                      color: AppTheme.warmGray, size: 22),
                   tooltip: 'Logout',
                 ),
                 const SizedBox(width: 4),

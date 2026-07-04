@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:audioplayers/audioplayers.dart';
 import '../models/medicine.dart';
 import '../services/database_service.dart';
 import '../services/notification_service.dart';
@@ -33,8 +32,6 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
   bool _isRepeat = true;
   String _soundKey = 'default';
   bool _saving = false;
-  final _audioPlayer = AudioPlayer();
-  bool _previewPlaying = false;
 
   bool get isEdit => widget.medicine != null;
   final _dayLabels = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
@@ -56,41 +53,16 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
   }
 
   @override
+  @override
   void dispose() {
     _nameCtrl.dispose();
     _dosageCtrl.dispose();
     _notesCtrl.dispose();
-    _audioPlayer.dispose();
     super.dispose();
   }
 
-  Future<void> _previewSound(String key) async {
-    if (kIsWeb) {
-      // Web: tidak support asset audio lokal, skip
-      setState(() => _soundKey = key);
-      return;
-    }
-    setState(() {
-      _soundKey = key;
-      _previewPlaying = true;
-    });
-    try {
-      await _audioPlayer.stop();
-      final sound = AlarmSound.findByKey(key);
-      if (sound.assetPath != null) {
-        await _audioPlayer.play(AssetSource(sound.assetPath!.replaceFirst('assets/', '')));
-      } else {
-        // default - pakai system beep via durasi singkat
-        await _audioPlayer.play(AssetSource('sounds/default.mp3'));
-      }
-      // Stop otomatis setelah 2 detik preview
-      await Future.delayed(const Duration(seconds: 2));
-      await _audioPlayer.stop();
-    } catch (e) {
-      debugPrint('Preview sound error: $e');
-    } finally {
-      if (mounted) setState(() => _previewPlaying = false);
-    }
+  Future<void> _selectSound(String key) async {
+    setState(() => _soundKey = key);
   }
 
   String get _timeStr =>
@@ -296,26 +268,7 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
               ],
 
               // Pilih suara
-              Row(
-                children: [
-                  Text('Nada dering', style: AppText.label),
-                  const SizedBox(width: 8),
-                  if (_previewPlaying)
-                    const SizedBox(
-                      width: 12, height: 12,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2, color: AppTheme.terracotta,
-                      ),
-                    ),
-                  if (_previewPlaying)
-                    Text('  memutar...', style: AppText.caption.copyWith(
-                      color: AppTheme.terracotta,
-                    )),
-                  if (kIsWeb && !_previewPlaying)
-                    Text('  (preview tidak tersedia di web)',
-                        style: AppText.caption),
-                ],
-              ),
+              Text('Nada dering', style: AppText.label),
               const SizedBox(height: 8),
               SizedBox(
                 height: 36,
@@ -324,11 +277,12 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
                   children: AlarmSound.all.map((s) {
                     final sel = _soundKey == s.key;
                     return GestureDetector(
-                      onTap: () => _previewSound(s.key),
+                      onTap: () => _selectSound(s.key),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 150),
                         margin: const EdgeInsets.only(right: 8),
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 8),
                         decoration: BoxDecoration(
                           color: sel ? AppTheme.terracotta : AppTheme.creamDark,
                           borderRadius: BorderRadius.circular(20),
@@ -337,20 +291,17 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             if (sel) ...[
-                              Icon(
-                                _previewPlaying
-                                    ? Icons.volume_up_rounded
-                                    : Icons.music_note_rounded,
-                                size: 13,
-                                color: AppTheme.white,
-                              ),
+                              const Icon(Icons.music_note_rounded,
+                                  size: 13, color: AppTheme.white),
                               const SizedBox(width: 4),
                             ],
                             Text(
                               s.label,
                               style: TextStyle(
-                                fontSize: 13, fontWeight: FontWeight.w500,
-                                color: sel ? AppTheme.white : AppTheme.warmGray,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                color:
+                                    sel ? AppTheme.white : AppTheme.warmGray,
                               ),
                             ),
                           ],
@@ -369,8 +320,10 @@ class _AddEditMedicineSheetState extends State<AddEditMedicineSheet> {
                   onPressed: _saving ? null : _save,
                   child: _saving
                       ? const SizedBox(
-                          height: 20, width: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.white),
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: AppTheme.white),
                         )
                       : Text(isEdit ? 'Simpan perubahan' : 'Tambah alarm'),
                 ),
